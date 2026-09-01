@@ -1,0 +1,27 @@
+services:
+
+  viavsr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: viavsr
+
+    ports:
+      - "8501:8501"
+
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+
+    volumes:
+      - ./uploads:/app/uploads
+      - ./outputs:/app/outputs
+      - model_cache:/app/.cache
+
+    gpus: all
+
+    restart: unless-stopped
+
+
+volumes:
+  model_cache:

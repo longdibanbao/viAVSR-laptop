@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
-from viavsr.evaluation import evaluate_transcript
+from viavsr.inference.schemas import LoadedAVSRAssets
 from viavsr.inference import (
     DEFAULT_BEAM_SIZE,
     DEFAULT_CTC_WEIGHT,
@@ -256,6 +256,8 @@ def run_end_to_end_demo(
     confidence_threshold: float | None = None,
     visual_fallback_policy: VisualFallbackPolicy = "whole_utterance",
     keep_intermediates: bool = False,
+    skip_face_tracking: bool = False,
+    preloaded_assets: LoadedAVSRAssets | None = None,
 ) -> dict[str, Any]:
     """Run raw media through best-effort visual processing and AVSR inference.
 
@@ -285,6 +287,8 @@ def run_end_to_end_demo(
             "confidence_threshold": confidence_threshold,
             "visual_fallback_policy": visual_fallback_policy,
             "keep_intermediates": keep_intermediates,
+            "skip_face_tracking": skip_face_tracking,
+            "preloaded_assets": preloaded_assets is not None,
         },
         "artifacts": paths.to_dict(include_intermediates=keep_intermediates),
         "timings_seconds": {},
@@ -304,12 +308,6 @@ def run_end_to_end_demo(
             max_detection_size=max_detection_size,
             visual_fallback_policy=visual_fallback_policy,
         )
-        quality_policy = load_face_tracking_quality_policy(resolved_config)
-        if confidence_threshold is not None:
-            quality_policy = replace(
-                quality_policy,
-                min_detection_confidence=confidence_threshold,
-            )
 
         stage = "media_preflight"
         stage_started = time.perf_counter()
@@ -325,107 +323,146 @@ def run_end_to_end_demo(
                 f"maximum of {max_duration_seconds:.3f}s."
             )
 
-        stage = "face_tracking_backend"
-        stage_started = time.perf_counter()
-        landmarker = FANFaceLandmarker(
-            device=tracking_device,
-            confidence_threshold=quality_policy.min_detection_confidence,
-        )
-        payload["timings_seconds"]["face_tracking_backend"] = (
-            time.perf_counter() - stage_started
-        )
-
-        stage = "face_tracking"
-        stage_started = time.perf_counter()
         visual_fallback: dict[str, str] | None = None
         sequence = None
-        try:
-            sequence = track_face_landmarks(
-                resolved_media,
-                landmarker=landmarker,
-                frame_rate=frame_rate,
-                policy=quality_policy,
-                max_detection_size=max_detection_size,
-            )
-        except MediaInputError as exc:
-            tracking_seconds = time.perf_counter() - stage_started
+        if skip_face_tracking:
+            stage = "face_tracking"
             visual_fallback = {
                 "stage": stage,
-                "type": type(exc).__name__,
-                "message": redact_secrets(str(exc)),
+                "type": "Skipped",
+                "message": "Face tracking skipped (audio-only mode).",
             }
             face_report = {
-                "status": "unavailable",
-                "quality_status": "unavailable",
+                "status": "skipped",
+                "quality_status": "skipped",
                 "stage": stage,
-                "error": {
-                    "type": visual_fallback["type"],
-                    "message": visual_fallback["message"],
-                },
-                "tracking_seconds": tracking_seconds,
+                "tracking_seconds": 0.0,
             }
             write_json_report(paths.face_tracking_report, face_report)
             payload["face_tracking"] = face_report
-            payload["timings_seconds"]["face_tracking"] = tracking_seconds
-        else:
-            face_report = save_face_tracking_artifacts(
-                sequence,
-                artifact_path=paths.face_track,
-                report_path=paths.face_tracking_report,
-            )
-            face_report["tracking_seconds"] = time.perf_counter() - stage_started
-            write_json_report(paths.face_tracking_report, face_report)
-            payload["face_tracking"] = face_report
-            payload["timings_seconds"]["face_tracking"] = face_report[
-                "tracking_seconds"
-            ]
-
-            if not sequence.quality_passed:
-                visual_fallback = {
-                    "stage": "face_tracking_quality",
-                    "type": "FaceTrackingQualityError",
-                    "message": redact_secrets("; ".join(sequence.quality_issues)),
-                }
-
-        stage = "mouth_roi_display"
-        stage_started = time.perf_counter()
-        display_track_path = paths.face_track if paths.face_track.is_file() else None
-        try:
-            display_result = export_mouth_roi_display_video(
-                resolved_media,
-                paths.mouth_roi_display,
-                track_path=display_track_path,
-            )
-        except MediaInputError as exc:
+            payload["timings_seconds"]["face_tracking_backend"] = 0.0
+            payload["timings_seconds"]["face_tracking"] = 0.0
             display_report = {
-                "status": "unavailable",
+                "status": "skipped",
                 "artifact_role": "ui_visualization_only",
                 "used_for_inference": False,
-                "error": {
+                "processing_seconds": 0.0,
+            }
+            write_json_report(paths.mouth_roi_display_report, display_report)
+            payload["mouth_roi_display"] = display_report
+            payload["timings_seconds"]["mouth_roi_display"] = 0.0
+        else:
+            quality_policy = load_face_tracking_quality_policy(resolved_config)
+            if confidence_threshold is not None:
+                quality_policy = replace(
+                    quality_policy,
+                    min_detection_confidence=confidence_threshold,
+                )
+            stage = "face_tracking_backend"
+            stage_started = time.perf_counter()
+            landmarker = FANFaceLandmarker(
+                device=tracking_device,
+                confidence_threshold=quality_policy.min_detection_confidence,
+            )
+            payload["timings_seconds"]["face_tracking_backend"] = (
+                time.perf_counter() - stage_started
+            )
+
+            stage = "face_tracking"
+            stage_started = time.perf_counter()
+            try:
+                sequence = track_face_landmarks(
+                    resolved_media,
+                    landmarker=landmarker,
+                    frame_rate=frame_rate,
+                    policy=quality_policy,
+                    max_detection_size=max_detection_size,
+                )
+            except MediaInputError as exc:
+                tracking_seconds = time.perf_counter() - stage_started
+                visual_fallback = {
+                    "stage": stage,
                     "type": type(exc).__name__,
                     "message": redact_secrets(str(exc)),
-                },
-                "processing_seconds": time.perf_counter() - stage_started,
-            }
-            payload.setdefault("warnings", []).append("mouth_roi_display_unavailable")
-        else:
-            display_report = display_result.to_dict()
-            display_report["status"] = "passed"
-            display_report["artifact_role"] = "ui_visualization_only"
-            display_report["used_for_inference"] = False
-            display_report["processing_seconds"] = time.perf_counter() - stage_started
-            payload["face_tracking"]["visual_availability"] = (
-                display_result.visual_availability
+                }
+                face_report = {
+                    "status": "unavailable",
+                    "quality_status": "unavailable",
+                    "stage": stage,
+                    "error": {
+                        "type": visual_fallback["type"],
+                        "message": visual_fallback["message"],
+                    },
+                    "tracking_seconds": tracking_seconds,
+                }
+                write_json_report(paths.face_tracking_report, face_report)
+                payload["face_tracking"] = face_report
+                payload["timings_seconds"]["face_tracking"] = tracking_seconds
+            else:
+                face_report = save_face_tracking_artifacts(
+                    sequence,
+                    artifact_path=paths.face_track,
+                    report_path=paths.face_tracking_report,
+                )
+                face_report["tracking_seconds"] = time.perf_counter() - stage_started
+                write_json_report(paths.face_tracking_report, face_report)
+                payload["face_tracking"] = face_report
+                payload["timings_seconds"]["face_tracking"] = face_report[
+                    "tracking_seconds"
+                ]
+
+                if not sequence.quality_passed:
+                    visual_fallback = {
+                        "stage": "face_tracking_quality",
+                        "type": "FaceTrackingQualityError",
+                        "message": redact_secrets("; ".join(sequence.quality_issues)),
+                    }
+
+            stage = "mouth_roi_display"
+            stage_started = time.perf_counter()
+            display_track_path = (
+                paths.face_track if paths.face_track.is_file() else None
             )
-            write_json_report(
-                paths.face_tracking_report,
-                payload["face_tracking"],
-            )
-        write_json_report(paths.mouth_roi_display_report, display_report)
-        payload["mouth_roi_display"] = display_report
-        payload["timings_seconds"]["mouth_roi_display"] = display_report[
-            "processing_seconds"
-        ]
+            try:
+                display_result = export_mouth_roi_display_video(
+                    resolved_media,
+                    paths.mouth_roi_display,
+                    track_path=display_track_path,
+                )
+            except MediaInputError as exc:
+                display_report = {
+                    "status": "unavailable",
+                    "artifact_role": "ui_visualization_only",
+                    "used_for_inference": False,
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": redact_secrets(str(exc)),
+                    },
+                    "processing_seconds": time.perf_counter() - stage_started,
+                }
+                payload.setdefault("warnings", []).append(
+                    "mouth_roi_display_unavailable"
+                )
+            else:
+                display_report = display_result.to_dict()
+                display_report["status"] = "passed"
+                display_report["artifact_role"] = "ui_visualization_only"
+                display_report["used_for_inference"] = False
+                display_report["processing_seconds"] = (
+                    time.perf_counter() - stage_started
+                )
+                payload["face_tracking"]["visual_availability"] = (
+                    display_result.visual_availability
+                )
+                write_json_report(
+                    paths.face_tracking_report,
+                    payload["face_tracking"],
+                )
+            write_json_report(paths.mouth_roi_display_report, display_report)
+            payload["mouth_roi_display"] = display_report
+            payload["timings_seconds"]["mouth_roi_display"] = display_report[
+                "processing_seconds"
+            ]
 
         has_usable_visual = sequence is not None and bool(sequence.mouth_visible.any())
         use_interval_gate = (
@@ -438,9 +475,15 @@ def run_end_to_end_demo(
         )
         visual_mask = sequence.mouth_visible if use_interval_gate else None
         if visual_fallback is not None and not use_interval_gate:
-            inference_mode = "audio_only_fallback"
+            inference_mode = (
+                "audio_only_experimental"
+                if skip_face_tracking
+                else "audio_only_fallback"
+            )
             payload.setdefault("warnings", []).append(
-                "visual_preprocessing_unavailable_audio_only_fallback"
+                "face_tracking_skipped_audio_only"
+                if skip_face_tracking
+                else "visual_preprocessing_unavailable_audio_only_fallback"
             )
             payload["modality_decision"] = {
                 "policy": visual_fallback_policy,
@@ -512,12 +555,17 @@ def run_end_to_end_demo(
 
         stage = "model_loading"
         stage_started = time.perf_counter()
-        model_config = load_model_assets_config(resolved_config)
-        assets = load_vietnamese_avsr_assets(model_config)
-        payload["model"] = assets.report.to_dict()
-        payload["timings_seconds"]["model_loading"] = (
-            time.perf_counter() - stage_started
-        )
+        if preloaded_assets is not None:
+            assets = preloaded_assets
+            payload["model"] = assets.report.to_dict()
+            payload["timings_seconds"]["model_loading"] = 0.0
+        else:
+            model_config = load_model_assets_config(resolved_config)
+            assets = load_vietnamese_avsr_assets(model_config)
+            payload["model"] = assets.report.to_dict()
+            payload["timings_seconds"]["model_loading"] = (
+                time.perf_counter() - stage_started
+            )
 
         stage = "inference"
         result = recognize_prepared_av(

@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: sans-serif; margin: 0; padding: 8px; }
+      video { width: 100%; max-height: 240px; background: #111; border-radius: 6px; }
+      .row { margin-top: 8px; display: flex; gap: 8px; align-items: center; }
+      button { padding: 8px 14px; cursor: pointer; }
+      .hint { color: #555; font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <video id="preview" autoplay muted playsinline></video>
+    <div class="row">
+      <button id="start">Start recording</button>
+      <button id="stop" disabled>Stop</button>
+      <span id="timer" class="hint">Max 6s</span>
+    </div>
+    <script>
+      const MAX_SECONDS = 6;
+      let stream, recorder, chunks = [], startedAt, tick;
+
+      function send(type, data) {
+        window.parent.postMessage({ isStreamlitMessage: true, type, ...data }, "*");
+      }
+      function ready() { send("streamlit:componentReady", { apiVersion: 1 }); }
+      function height(h) { send("streamlit:setFrameHeight", { height: h }); }
+      function value(v) { send("streamlit:setComponentValue", { value: v }); }
+
+      async function startPreview() {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: { ideal: 480 }, height: { ideal: 360 }, frameRate: { ideal: 15 } },
+          audio: true,
+        });
+        document.getElementById("preview").srcObject = stream;
+      }
+
+      document.getElementById("start").onclick = () => {
+        chunks = [];
+        value(null);
+        const mime = MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")
+          ? "video/webm;codecs=vp8,opus"
+          : "video/webm";
+        recorder = new MediaRecorder(stream, {
+          mimeType: mime,
+          videoBitsPerSecond: 250000,
+          audioBitsPerSecond: 32000,
+        });
+        recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+        recorder.onstop = () => {
+          const blob = new Blob(chunks, { type: "video/webm" });
+          const reader = new FileReader();
+          reader.onloadend = () => value(reader.result);
+          reader.readAsDataURL(blob);
+        };
+        recorder.start();
+        startedAt = Date.now();
+        document.getElementById("start").disabled = true;
+        document.getElementById("stop").disabled = false;
+        tick = setInterval(() => {
+          const sec = Math.floor((Date.now() - startedAt) / 1000);
+          document.getElementById("timer").textContent = sec + "s / " + MAX_SECONDS + "s";
+          if (sec >= MAX_SECONDS) stopRec();
+        }, 250);
+      };
+
+      function stopRec() {
+        if (!recorder || recorder.state === "inactive") return;
+        clearInterval(tick);
+        recorder.stop();
+        document.getElementById("start").disabled = false;
+        document.getElementById("stop").disabled = true;
+        document.getElementById("timer").textContent = "Recorded";
+      }
+      document.getElementById("stop").onclick = stopRec;
+
+      window.addEventListener("load", async () => {
+        ready();
+        height(320);
+        try {
+          await startPreview();
+        } catch (err) {
+          document.getElementById("timer").textContent = "Camera/mic permission denied";
+        }
+      });
+    </script>
+  </body>
+</html>
