@@ -34,7 +34,7 @@ from viavsr.preprocessing.face_tracking import DEFAULT_DETECTION_MAX_SIZE, Devic
 from viavsr.preprocessing.media import TARGET_FRAME_RATE
 
 DEMO_REPORT_SCHEMA_VERSION = 3
-VisualFallbackPolicy = Literal["whole_utterance", "interval_gated"]
+VisualFallbackPolicy = Literal["whole_utterance", "corrupted_av", "interval_gated"]
 
 
 @dataclass(frozen=True)
@@ -165,7 +165,9 @@ def _validate_run_options(
         raise ValueError("frame_rate must be greater than zero.")
     if max_detection_size <= 0:
         raise ValueError("max_detection_size must be greater than zero.")
-    if visual_fallback_policy not in {"whole_utterance", "interval_gated"}:
+    if visual_fallback_policy not in {
+        "whole_utterance", "corrupted_av", "interval_gated"
+    }:
         raise ValueError(
             f"Unsupported visual fallback policy: {visual_fallback_policy}"
         )
@@ -263,6 +265,8 @@ def run_end_to_end_demo(
 
     All generated files are written below output_root/media-stem. Failed face
     tracking falls back to audio-only inference when the media audio is usable.
+    Partial visual tracks can either be neutral-filled before ordinary AV
+    inference or masked again at the encoder feature level.
     """
 
     started_at = time.perf_counter()
@@ -470,11 +474,20 @@ def run_end_to_end_demo(
             and has_usable_visual
             and not bool(sequence.mouth_visible.all())
         )
-        inference_mode = (
-            "audio_visual_interval_gated" if use_interval_gate else "audio_visual"
+        use_corrupted_av = (
+            visual_fallback_policy == "corrupted_av"
+            and has_usable_visual
+            and not bool(sequence.mouth_visible.all())
         )
-        visual_mask = sequence.mouth_visible if use_interval_gate else None
-        if visual_fallback is not None and not use_interval_gate:
+        use_partial_visual = use_interval_gate or use_corrupted_av
+        if use_interval_gate:
+            inference_mode = "audio_visual_interval_gated"
+        elif use_corrupted_av:
+            inference_mode = "audio_visual_corrupted"
+        else:
+            inference_mode = "audio_visual"
+        visual_mask = sequence.mouth_visible if use_partial_visual else None
+        if visual_fallback is not None and not use_partial_visual:
             inference_mode = (
                 "audio_only_experimental"
                 if skip_face_tracking
@@ -508,28 +521,35 @@ def run_end_to_end_demo(
                 "selected_mode": inference_mode,
                 "visual_input_used": True,
                 "visual_gap_policy": (
-                    "zero_before_visual_frontend_and_feature_gated"
+                    "zero_before_visual_frontend"
+                    if use_corrupted_av
+                    else "zero_before_visual_frontend_and_feature_gated"
                     if use_interval_gate
                     else "interpolated_landmarks"
                 ),
                 "display_gap_policy": "no_visual_signal_placeholder",
                 "availability_source": "stabilized_mouth_landmarks",
                 "visual_coverage": float(sequence.mouth_visible.mean()),
-                "experimental": use_interval_gate,
+                "visual_masked_frames": int((~sequence.mouth_visible).sum()),
+                "experimental": use_partial_visual,
             }
             stage = "mouth_roi"
             if use_interval_gate:
                 payload.setdefault("warnings", []).append(
                     "experimental_interval_gating_enabled"
                 )
-                if visual_fallback is not None:
-                    payload["modality_decision"]["quality_warning"] = visual_fallback
+            elif use_corrupted_av:
+                payload.setdefault("warnings", []).append(
+                    "experimental_corrupted_av_enabled"
+                )
+            if use_partial_visual and visual_fallback is not None:
+                payload["modality_decision"]["quality_warning"] = visual_fallback
             stage_started = time.perf_counter()
             mouth_result = export_aligned_mouth_roi_video(
                 resolved_media,
                 paths.face_track,
                 paths.mouth_roi,
-                require_quality_passed=not use_interval_gate,
+                require_quality_passed=not use_partial_visual,
             )
             mouth_report = mouth_result.to_dict()
             mouth_report["processing_seconds"] = time.perf_counter() - stage_started

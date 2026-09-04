@@ -248,8 +248,22 @@ tensor shapes, model/tokenizer metadata, modality decisions, decoder parameters,
 transcript, timings, and optional WER/CER. If visual preprocessing is unusable,
 the default `whole_utterance` policy transcribes from audio only.
 
-An experimental interval-level policy is available for recordings where visual
-data is missing only during parts of the utterance:
+Two experimental partial-visual policies are available for recordings where
+the mouth is unavailable only during parts of the utterance. To reproduce the
+benchmark's corrupted-AV condition on a webcam recording:
+
+~~~bash
+python scripts/run_avsr_demo.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_001.mp4 \
+  --visual-fallback-policy corrupted_av
+~~~
+
+`corrupted_av` neutral-fills unavailable normalized mouth frames while keeping
+all aligned audio, then runs the checkpoint's ordinary audio-visual path. It
+does not suppress visual features explicitly.
+
+To apply interval gating instead:
 
 ~~~bash
 python scripts/run_avsr_demo.py \
@@ -258,12 +272,38 @@ python scripts/run_avsr_demo.py \
   --visual-fallback-policy interval_gated
 ~~~
 
-This mode zeros unavailable mouth frames before the visual frontend and zeros
-their visual features again before audio/visual fusion. It preserves usable
-visual intervals, but the released checkpoint was not specifically trained for
-this masking policy, so compare its WER/CER against the default fallback.
+`interval_gated` uses the same neutral-filled input but also zeros unavailable
+visual features before audio/visual fusion. Both modes preserve usable visual
+intervals and expose the same `No visual signal` intervals in the UI artifact.
+Compare their WER/CER on the same recording and reference text.
 
-Add `--keep-intermediates` when debugging. Transient face tracks, stage reports,
+For a strict paired comparison, use one command to share the face track,
+prepared tensors, availability mask, and loaded model across corrupted AV,
+interval-gated AV, and audio-only inference:
+
+~~~bash
+python scripts/compare_webcam_modes.py \
+  --config configs/config.yaml \
+  --media samples/webcam/webcam_008.mp4 \
+  --tracking-device cuda \
+  --decoder joint_beam_search \
+  --beam-size 3 \
+  --ctc-weight 0.1 \
+  --reference-text "ơ sau một ngày mệt nhoài thì ờ cuối cùng tôi cũng đã về lại ký túc xá"
+~~~
+
+The comparison report includes tensor and availability-mask fingerprints,
+per-mode transcripts and WER/CER, paired metric deltas, model metadata, and
+timings. Only two compact artifacts are retained:
+
+~~~text
+outputs/experiments/paired_webcam/webcam_008/
+  comparison_report.json
+  mouth_roi.mp4
+~~~
+
+For the normal demo runner, add `--keep-intermediates` when debugging.
+Transient face tracks, stage reports,
 and the inference-only ROI are then retained under `outputs/demo/<stem>/.work/`.
 Without that flag they are deleted after the consolidated report is written.
 
@@ -339,9 +379,10 @@ separate backend contract before they can be shown truthfully.
 7. Allow exporting the final `report.json`.
 
 Use `whole_utterance` as the default fallback policy. The UI may expose
-`interval_gated` behind an **Experimental** control; the released checkpoint
-was not trained specifically for interval masking. Keep the record/infer flow
-single-utterance and single-speaker for this milestone. Multi-speaker selection,
+`corrupted_av` and `interval_gated` behind an **Experimental** control; the
+released checkpoint was not trained specifically for these real-webcam
+missing-interval policies. Keep the record/infer flow single-utterance and
+single-speaker for this milestone. Multi-speaker selection,
 live streaming, top-N hypotheses, word-level confidence, and model fine-tuning
 remain separate backend work.
 
