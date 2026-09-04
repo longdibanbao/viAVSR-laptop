@@ -20,6 +20,7 @@ from .schemas import InferenceResult, LoadedAVSRAssets
 DecoderName = Literal["ctc_greedy", "joint_beam_search"]
 InferenceMode = Literal[
     "audio_visual",
+    "audio_visual_corrupted",
     "audio_visual_interval_gated",
     "audio_only_experimental",
     "audio_only_fallback",
@@ -121,6 +122,10 @@ def recognize_prepared_av(
 
     audio_visual_interval_gated requires a frame-aligned visual availability
     mask and removes unavailable visual features before fusion.
+
+    audio_visual_corrupted applies the same frame-aligned mask only to the
+    normalized video tensor, then runs the released checkpoint's ordinary
+    audio-visual path without feature gating.
     """
     _validate_prepared_input(prepared)
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
@@ -130,6 +135,7 @@ def recognize_prepared_av(
         )
     if inference_mode not in {
         "audio_visual",
+        "audio_visual_corrupted",
         "audio_visual_interval_gated",
         "audio_only_experimental",
         "audio_only_fallback",
@@ -144,9 +150,12 @@ def recognize_prepared_av(
     videos = prepared.videos.to(device=device, dtype=dtype)
     audios = prepared.audios.to(device=device, dtype=dtype)
     availability = prepared.visual_availability
-    if inference_mode == "audio_visual_interval_gated" and availability is None:
+    if inference_mode in {
+        "audio_visual_corrupted",
+        "audio_visual_interval_gated",
+    } and availability is None:
         raise InferenceError(
-            "Interval-gated inference requires visual_availability.",
+            f"{inference_mode} inference requires visual_availability.",
             stage="inference_input",
         )
     availability_device = (
@@ -154,10 +163,18 @@ def recognize_prepared_av(
     )
     encoder_video = (
         videos
-        if inference_mode in {"audio_visual", "audio_visual_interval_gated"}
+        if inference_mode
+        in {
+            "audio_visual",
+            "audio_visual_corrupted",
+            "audio_visual_interval_gated",
+        }
         else None
     )
-    if inference_mode == "audio_visual_interval_gated":
+    if inference_mode in {
+        "audio_visual_corrupted",
+        "audio_visual_interval_gated",
+    }:
         assert encoder_video is not None
         assert availability_device is not None
         encoder_video = encoder_video * availability_device[:, None, :, None, None]

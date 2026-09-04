@@ -175,6 +175,38 @@ def test_recognize_prepared_av_runs_audio_only_fallback() -> None:
     assert result.visual_input_used is False
 
 
+def test_recognize_prepared_av_applies_corrupted_visual_mask_without_gate() -> None:
+    model = _FakeModel()
+    assets = SimpleNamespace(model=model, tokenizer=_FakeTokenizer())
+    mask = torch.tensor([[True, True, False, False, True, True]])
+    base = _prepared()
+    prepared = PreparedAVInput(
+        videos=torch.ones_like(base.videos),
+        audios=base.audios,
+        video_lengths=base.video_lengths,
+        audio_lengths=base.audio_lengths,
+        metadata=base.metadata,
+        visual_availability=mask,
+    )
+
+    result = recognize_prepared_av(
+        assets,  # type: ignore[arg-type]
+        prepared,
+        inference_mode="audio_visual_corrupted",
+    )
+
+    seen_video = model.avsr.encoder.seen_video
+    assert seen_video is not None
+    assert torch.all(seen_video[:, :, :2] == 1)
+    assert torch.all(seen_video[:, :, 2:4] == 0)
+    assert torch.all(seen_video[:, :, 4:] == 1)
+    assert model.avsr.encoder.seen_visual_availability is None
+    assert result.inference_mode == "audio_visual_corrupted"
+    assert result.visual_input_used is True
+    assert result.visual_coverage == pytest.approx(4 / 6)
+    assert result.visual_masked_frames == 2
+
+
 def test_recognize_prepared_av_applies_interval_visual_gate() -> None:
     model = _FakeModel()
     assets = SimpleNamespace(model=model, tokenizer=_FakeTokenizer())
@@ -206,14 +238,20 @@ def test_recognize_prepared_av_applies_interval_visual_gate() -> None:
     assert result.visual_masked_frames == 2
 
 
-def test_interval_visual_gate_requires_availability_mask() -> None:
+@pytest.mark.parametrize(
+    "inference_mode",
+    ["audio_visual_corrupted", "audio_visual_interval_gated"],
+)
+def test_masked_visual_modes_require_availability_mask(
+    inference_mode: str,
+) -> None:
     assets = SimpleNamespace(model=_FakeModel(), tokenizer=_FakeTokenizer())
 
     with pytest.raises(InferenceError, match="requires visual_availability"):
         recognize_prepared_av(
             assets,  # type: ignore[arg-type]
             _prepared(),
-            inference_mode="audio_visual_interval_gated",
+            inference_mode=inference_mode,  # type: ignore[arg-type]
         )
 
 

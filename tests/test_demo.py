@@ -333,9 +333,30 @@ def test_debug_flag_retains_intermediate_artifacts(
     assert "work_directory" in payload["artifacts"]
 
 
-def test_interval_policy_uses_partial_track_instead_of_whole_fallback(
+@pytest.mark.parametrize(
+    ("policy", "inference_mode", "gap_policy", "warning"),
+    [
+        (
+            "interval_gated",
+            "audio_visual_interval_gated",
+            "zero_before_visual_frontend_and_feature_gated",
+            "experimental_interval_gating_enabled",
+        ),
+        (
+            "corrupted_av",
+            "audio_visual_corrupted",
+            "zero_before_visual_frontend",
+            "experimental_corrupted_av_enabled",
+        ),
+    ],
+)
+def test_partial_visual_policy_uses_track_instead_of_whole_fallback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    policy: str,
+    inference_mode: str,
+    gap_policy: str,
+    warning: str,
 ) -> None:
     raw_media = tmp_path / "partial.mp4"
     raw_media.write_bytes(b"raw")
@@ -384,14 +405,14 @@ def test_interval_policy_uses_partial_track_instead_of_whole_fallback(
         inference_seconds=0.2,
         to_dict=lambda: {
             "transcript": "partial transcript",
-            "inference_mode": "audio_visual_interval_gated",
+            "inference_mode": inference_mode,
             "visual_input_used": True,
         },
     )
 
     def recognize(_assets, actual_prepared, **kwargs):
         assert actual_prepared is prepared
-        assert kwargs["inference_mode"] == "audio_visual_interval_gated"
+        assert kwargs["inference_mode"] == inference_mode
         calls.append("infer")
         return result
 
@@ -401,16 +422,16 @@ def test_interval_policy_uses_partial_track_instead_of_whole_fallback(
         config_path=tmp_path / "config.yaml",
         media_path=raw_media,
         output_root=tmp_path / "outputs",
-        visual_fallback_policy="interval_gated",
+        visual_fallback_policy=policy,  # type: ignore[arg-type]
     )
 
     assert payload["status"] == "passed"
-    assert payload["modality_decision"]["selected_mode"] == (
-        "audio_visual_interval_gated"
-    )
+    assert payload["modality_decision"]["selected_mode"] == inference_mode
+    assert payload["modality_decision"]["visual_gap_policy"] == gap_policy
     assert payload["modality_decision"]["visual_coverage"] == pytest.approx(0.8)
+    assert payload["modality_decision"]["visual_masked_frames"] == 20
     assert payload["modality_decision"]["experimental"] is True
-    assert "experimental_interval_gating_enabled" in payload["warnings"]
+    assert warning in payload["warnings"]
     assert "prepare_audio" not in calls
 
 
