@@ -44,10 +44,13 @@ def _torch_dtype(name: str) -> torch.dtype:
 
 
 def _validate_device(config: ModelAssetsConfig) -> torch.device:
+    if config.device == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
     if config.device == "cuda" and not torch.cuda.is_available():
         raise DeviceUnavailableError(
             "CUDA was requested but torch.cuda.is_available() is false. "
-            "Use device: cpu explicitly to run on CPU.",
+            "Use device: auto for a deliberate CPU fallback or device: cpu "
+            "for an intentional CPU-only run.",
             stage="device",
         )
     return torch.device(config.device)

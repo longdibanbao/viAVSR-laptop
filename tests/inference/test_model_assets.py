@@ -7,6 +7,7 @@ import torch
 from viavsr.inference.config import ModelAssetsConfig
 from viavsr.inference.errors import DeviceUnavailableError, VocabularyMismatchError
 from viavsr.inference.model_assets import (
+    _validate_device,
     _validate_model_placement,
     collect_vocabulary_dimensions,
     load_vietnamese_avsr_assets,
@@ -64,6 +65,23 @@ def test_cuda_request_fails_without_fallback(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     with pytest.raises(DeviceUnavailableError, match="CUDA was requested"):
         load_vietnamese_avsr_assets(_config(tmp_path, "cuda"))
+
+
+@pytest.mark.parametrize(
+    ("cuda_available", "expected_device"),
+    [(False, "cpu"), (True, "cuda")],
+)
+def test_auto_device_selects_best_available_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cuda_available: bool,
+    expected_device: str,
+):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: cuda_available)
+
+    device = _validate_device(_config(tmp_path, "auto"))
+
+    assert device.type == expected_device
 
 
 def test_load_passes_pinned_arguments_and_sets_eval(tmp_path: Path, monkeypatch):

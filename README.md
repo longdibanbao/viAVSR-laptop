@@ -126,7 +126,7 @@ model:
   repository_id: nguyenvulebinh/AV-HuBERT-CTC-Attention-VI
   revision: b8a1fa5d6079701b3f8f791bfd601057fbd23de3
   cache_dir: .cache/models
-  device: cuda
+  device: auto
   dtype: float32
 
 tokenizer:
@@ -134,7 +134,7 @@ tokenizer:
   units_path: assets/tokenizers/vi/unigram2048_units.txt
 ```
 
-Set `model.device` to `cpu` for an intentional CPU run. The loader does not silently fall back from CUDA to CPU. Do not put credentials or machine-specific absolute paths in YAML.
+`model.device: auto` selects CUDA when a compatible GPU is visible and otherwise uses CPU. Set it to `cuda` when GPU availability must be enforced (this remains fail-fast), or to `cpu` for an intentional CPU-only run. Do not put credentials or machine-specific absolute paths in YAML.
 
 ## Hugging Face authentication
 
@@ -738,13 +738,20 @@ The same workflow applies to a lab server or rented Linux GPU:
 1. Clone the repository on the remote Linux filesystem.
 2. Create the `viavsr` Conda environment.
 3. Export a personal `HF_TOKEN`.
-4. Keep `model.device: cuda`.
+4. Keep `model.device: auto`, or use `cuda` when the job must fail if no GPU is available.
 5. Run tokenizer and model-asset validation.
 6. Copy only required input media to the server.
 7. Run preprocessing and inference.
 8. Copy back small JSON reports and transcripts.
 
 Use persistent storage for `.cache/models/` when available so the checkpoint is not downloaded for every session.
+
+For NVIDIA Blackwell, use a CUDA 12.8-compatible host driver and the repository Docker image, which installs the pinned PyTorch 2.7.1 CUDA 12.8 wheels. Docker GPU passthrough also requires NVIDIA Container Toolkit on the host. Verify the runtime before a demo:
+
+```bash
+nvidia-smi
+python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.get_device_name(0)); assert torch.cuda.is_available()"
+```
 
 ## Troubleshooting
 
@@ -754,7 +761,7 @@ This is expected for ordinary webcam video. Run tracking and mouth extraction be
 
 ### CUDA was requested but is unavailable
 
-Check `nvidia-smi`, the CUDA-enabled PyTorch installation, and WSL GPU support. Set `model.device: cpu` only for an intentional CPU run.
+Check `nvidia-smi`, the CUDA-enabled PyTorch installation, and WSL GPU support. Use `model.device: auto` to allow CPU fallback, or `cpu` for an intentional CPU-only run.
 
 ### Model access fails
 

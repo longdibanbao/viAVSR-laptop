@@ -798,7 +798,7 @@ if run and media_path and media_path.is_file():
                 config_path=CONFIG,
                 media_path=prepared,
                 output_root=OUTPUT_ROOT,
-                tracking_device="cpu",
+                tracking_device="auto",
                 decoder=decoder,
                 max_duration_seconds=float(clip_seconds + DURATION_SLACK),
                 max_detection_size=max_detection,
