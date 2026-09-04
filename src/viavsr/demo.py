@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from viavsr.evaluation import evaluate_transcript
 from viavsr.inference.schemas import LoadedAVSRAssets
 from viavsr.inference import (
     DEFAULT_BEAM_SIZE,
