@@ -3,6 +3,7 @@ import json
 import numpy as np
 import pytest
 
+from viavsr.preprocessing import face_tracking
 from viavsr.preprocessing.errors import MediaInputError
 from viavsr.preprocessing.face_tracking import (
     FaceCandidate,
@@ -64,6 +65,46 @@ def test_track_face_landmarks_rejects_invalid_processing_parameters() -> None:
         match="maximum detection size must be positive",
     ):
         track_face_landmarks("missing.mp4", max_detection_size=0)
+
+    with pytest.raises(MediaInputError, match="detection stride must be positive"):
+        track_face_landmarks("missing.mp4", detection_stride=0)
+
+
+def test_tracking_stride_interpolates_skipped_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = _metadata()
+    frames = [np.zeros((360, 640, 3), dtype=np.uint8) for _ in range(5)]
+    calls: list[int] = []
+
+    class FakeLandmarker:
+        name = "fake"
+        device = "cpu"
+
+        def detect(self, frame: np.ndarray) -> list[FaceCandidate]:
+            calls.append(id(frame))
+            return [_candidate((10, 10, 50, 50), landmark_value=20.0)]
+
+    monkeypatch.setattr(face_tracking, "probe_av_media", lambda _path: metadata)
+    monkeypatch.setattr(
+        face_tracking,
+        "iter_resampled_rgb_frames",
+        lambda *_args, **_kwargs: iter(frames),
+    )
+
+    sequence = track_face_landmarks(
+        "/tmp/webcam.mp4",
+        landmarker=FakeLandmarker(),
+        detection_stride=2,
+    )
+
+    assert len(calls) == 3
+    assert sequence.detected.tolist() == [True, False, True, False, True]
+    assert sequence.mouth_visible.tolist() == [True, True, True, True, True]
+    assert sequence.observed_frames == 3
+    assert sequence.detector_skipped_frames == 2
+    assert sequence.detection_rate == 1.0
+    assert sequence.quality_passed
 
 
 def test_bounding_box_iou() -> None:
@@ -323,7 +364,8 @@ def test_long_missing_run_fails_sequence_quality() -> None:
     )
 
     assert not sequence.quality_passed
-    assert sequence.report()["status"] == "failed"
+    assert sequence.report()["status"] == "degraded"
+    assert sequence.report()["quality_status"] == "failed"
     assert "maximum_missing_run_exceeded:6>5" in sequence.quality_issues
 
 

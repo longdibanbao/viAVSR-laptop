@@ -352,6 +352,11 @@ silently interpreting changed fields.
 | Warning state | `warnings` and `modality_decision.fallback_reason` |
 | Failure state | `status`, `stage`, and `error.message` |
 
+`face_tracking.status` is `passed` for a reliable track, `degraded` when a
+partial track exists but fails the strict quality gate, and `unavailable` when
+tracking cannot produce a usable sequence. `quality_status` remains the
+pass/fail quality-gate result used by the fallback policy.
+
 The exported mouth video is specifically for UI playback. Its missing intervals
 already contain `No visual signal` frames synchronized to the original
 timeline. If `artifacts.mouth_roi` is absent, show a persistent no-visual
@@ -378,10 +383,16 @@ separate backend contract before they can be shown truthfully.
    crashing or leaving stale output from a previous run.
 7. Allow exporting the final `report.json`.
 
-Use `whole_utterance` as the default fallback policy. The UI may expose
-`corrupted_av` and `interval_gated` behind an **Experimental** control; the
-released checkpoint was not trained specifically for these real-webcam
-missing-interval policies. Keep the record/infer flow single-utterance and
+The Streamlit UI exposes `whole_utterance`, `corrupted_av`, and
+`interval_gated`, with `whole_utterance` as the safe default. It uses joint
+CTC/Attention decoding by default and labels CTC greedy as the faster option.
+The model and RetinaFace/FAN backend are cached across UI reruns to avoid
+reloading them for every clip. In the UI's shortened mode, face detection runs
+on every second 25 FPS frame and the existing temporal interpolation restores
+the intermediate landmarks; the full mode and CLI still inspect every frame.
+The released checkpoint was not trained
+specifically for these real-webcam missing-interval policies.
+Keep the record/infer flow single-utterance and
 single-speaker for this milestone. Multi-speaker selection,
 live streaming, top-N hypotheses, word-level confidence, and model fine-tuning
 remain separate backend work.

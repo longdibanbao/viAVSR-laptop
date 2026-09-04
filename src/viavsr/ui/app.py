@@ -112,7 +112,10 @@ def _hf_credentials_ready() -> bool:
         return True
     token_file = Path.home() / ".cache" / "huggingface" / "token"
     try:
-        return token_file.is_file() and token_file.read_text(encoding="utf-8").strip() != ""
+        return (
+            token_file.is_file()
+            and token_file.read_text(encoding="utf-8").strip() != ""
+        )
     except OSError:
         return token_file.is_file()
 
@@ -348,6 +351,7 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+
 def _tool(name: str) -> str | None:
     found = shutil.which(name)
     if found:
@@ -355,7 +359,13 @@ def _tool(name: str) -> str | None:
     prefix = Path(os.environ.get("CONDA_PREFIX", ""))
     for candidate in (
         prefix / "Library" / "bin" / f"{name}.exe",
-        Path.home() / "miniconda3" / "envs" / "viavsr" / "Library" / "bin" / f"{name}.exe",
+        Path.home()
+        / "miniconda3"
+        / "envs"
+        / "viavsr"
+        / "Library"
+        / "bin"
+        / f"{name}.exe",
     ):
         if candidate.is_file():
             return str(candidate)
@@ -440,6 +450,7 @@ def _configure_torch_speed() -> None:
 
 _configure_torch_speed()
 
+
 @st.cache_resource(show_spinner="Đang tải model…")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
@@ -452,10 +463,28 @@ def _load_cached_model_assets():
     return load_vietnamese_avsr_assets(config)
 
 
+@st.cache_resource(show_spinner="Đang tải bộ theo dõi khuôn mặt…")
+def _load_cached_face_landmarker():
+    """Keep one RetinaFace/FAN instance in memory across visual demo runs."""
+    _ensure_repo_viavsr()
+    from viavsr.preprocessing import (
+        FANFaceLandmarker,
+        load_face_tracking_quality_policy,
+    )
+
+    policy = load_face_tracking_quality_policy(CONFIG)
+    return FANFaceLandmarker(
+        device="auto",
+        confidence_threshold=policy.min_detection_confidence,
+    )
+
+
 @st.cache_resource(show_spinner=False)
-def _startup_warmup() -> bool:
-    """Load tokenizer + model once when the app opens (inference runs skip model load)."""
+def _startup_warmup(include_visual: bool) -> bool:
+    """Load reusable model and optional visual backend before the first run."""
     _load_cached_model_assets()
+    if include_visual:
+        _load_cached_face_landmarker()
     return True
 
 
@@ -471,7 +500,9 @@ def _prepare_media(
         return _prepare_media_fast_audio(src, clip_seconds)
     ffmpeg = _tool("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("FFmpeg was not found. Activate the viavsr conda env and retry.")
+        raise RuntimeError(
+            "FFmpeg was not found. Activate the viavsr conda env and retry."
+        )
     dest = UPLOAD_DIR / f"{src.stem}_prep.mp4"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     video_codec = (
@@ -516,7 +547,9 @@ def _prepare_media_fast_audio(src: Path, clip_seconds: float) -> Path:
     """Trim clip with stream copy when possible; minimal re-encode otherwise."""
     ffmpeg = _tool("ffmpeg")
     if ffmpeg is None:
-        raise RuntimeError("FFmpeg was not found. Activate the viavsr conda env and retry.")
+        raise RuntimeError(
+            "FFmpeg was not found. Activate the viavsr conda env and retry."
+        )
     dest = UPLOAD_DIR / f"{src.stem}_fast.mp4"
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -659,6 +692,18 @@ with st.sidebar:
         value=ON_CLOUD,
         help="Không dùng hình miệng — nhanh hơn nhiều.",
     )
+    visual_fallback_policy = st.selectbox(
+        "Xử lý khi mất hình",
+        ("whole_utterance", "corrupted_av", "interval_gated"),
+        index=0,
+        disabled=audio_only,
+        format_func=lambda value: {
+            "whole_utterance": "Fallback toàn câu về audio",
+            "corrupted_av": "Corrupted AV",
+            "interval_gated": "Interval-gated AV",
+        }[value],
+        help="Chọn cách xử lý khi chỉ một số khoảng hình miệng không khả dụng.",
+    )
     fast_mode = st.toggle(
         "Rút gọn",
         value=True,
@@ -679,8 +724,12 @@ with st.sidebar:
     decoder = st.selectbox(
         "Decoder",
         ("ctc_greedy", "joint_beam_search"),
-        index=0,
-        help="ctc_greedy nhanh hơn.",
+        index=1,
+        format_func=lambda value: {
+            "ctc_greedy": "CTC greedy (nhanh)",
+            "joint_beam_search": "Joint CTC/Attention (khuyến nghị)",
+        }[value],
+        help="Joint CTC/Attention là mặc định; CTC greedy là chế độ nhanh.",
     )
     if not _hf_credentials_ready():
         if ON_CLOUD:
@@ -691,7 +740,7 @@ with st.sidebar:
                 "rồi chạy lại Streamlit, hoặc `huggingface-cli login`, "
                 "hoặc thêm `HF_TOKEN` vào `.streamlit/secrets.toml`."
             )
-    _startup_warmup()
+    _startup_warmup(include_visual=not audio_only)
 
 input_col, preview_col = st.columns([1, 1], gap="large")
 
@@ -786,15 +835,15 @@ if run and media_path and media_path.is_file():
                 fast=fast_mode,
             )
             status.write(
-                "Nhận dạng…"
-                if audio_only
-                else "Theo dõi khuôn mặt và nhận dạng…"
+                "Nhận dạng…" if audio_only else "Theo dõi khuôn mặt và nhận dạng…"
             )
             assets = _load_cached_model_assets()
+            landmarker = None if audio_only else _load_cached_face_landmarker()
 
             result = _call_run_end_to_end_demo(
                 audio_only=audio_only,
                 preloaded_assets=assets,
+                preloaded_landmarker=landmarker,
                 config_path=CONFIG,
                 media_path=prepared,
                 output_root=OUTPUT_ROOT,
@@ -802,7 +851,8 @@ if run and media_path and media_path.is_file():
                 decoder=decoder,
                 max_duration_seconds=float(clip_seconds + DURATION_SLACK),
                 max_detection_size=max_detection,
-                visual_fallback_policy="whole_utterance",
+                detection_stride=2 if fast_mode else 1,
+                visual_fallback_policy=visual_fallback_policy,
             )
             status.write("Xong.")
             status.update(label="Hoàn tất", state="complete")
@@ -831,17 +881,17 @@ if "result" in st.session_state:
 
         st.markdown(
             f'<div class="viavsr-meta">'
-            f'<span>Trạng thái · <strong>{html.escape(status)}</strong></span>'
-            f'<span>Chế độ · <strong>{html.escape(mode.replace("_", " "))}</strong></span>'
-            f'<span>{total_s:.1f}s</span>'
-            f'</div>',
+            f"<span>Trạng thái · <strong>{html.escape(status)}</strong></span>"
+            f"<span>Chế độ · <strong>{html.escape(mode.replace('_', ' '))}</strong></span>"
+            f"<span>{total_s:.1f}s</span>"
+            f"</div>",
             unsafe_allow_html=True,
         )
 
         st.markdown(
             f'<div class="viavsr-transcript-wrap">'
             f'<p class="viavsr-transcript">{html.escape(transcript)}</p>'
-            f'</div>',
+            f"</div>",
             unsafe_allow_html=True,
         )
 
