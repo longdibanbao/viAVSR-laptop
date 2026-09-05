@@ -369,6 +369,11 @@ def _encode_mouth_video(
         "16000",
         "-ac",
         "1",
+        # Keep the generated mouth-video timeline authoritative. Source audio can
+        # be a few samples/frames shorter after container timestamp rounding;
+        # padding it prevents ``-shortest`` from dropping valid mouth frames.
+        "-af",
+        "apad",
         "-shortest",
         str(output_path),
     ]

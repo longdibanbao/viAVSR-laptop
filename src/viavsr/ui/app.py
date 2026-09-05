@@ -126,14 +126,24 @@ st.markdown(
     """
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,600;1,9..144,400&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
-    /* Streamlit chrome che kicker — ẩn header/footer mặc định */
-    header[data-testid="stHeader"],
+    /* Keep the header mounted so the collapsed sidebar can be reopened. */
+    header[data-testid="stHeader"] {
+        visibility: visible !important;
+        height: 3rem !important;
+        min-height: 3rem !important;
+        background: transparent !important;
+    }
     footer,
     [data-testid="stDecoration"] {
         display: none !important;
         visibility: hidden !important;
         height: 0 !important;
         min-height: 0 !important;
+    }
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stSidebarCollapseButton"] {
+        display: flex !important;
+        visibility: visible !important;
     }
     .stApp {
         background-color: #ffffff;
@@ -143,7 +153,7 @@ st.markdown(
     .block-container {
         padding-top: 2.25rem !important;
         padding-bottom: 4rem !important;
-        max-width: 1040px;
+        max-width: 1560px;
     }
     html, body, [class*="css"] {
         font-family: "DM Sans", sans-serif;
@@ -167,7 +177,7 @@ st.markdown(
 
     /* Hero */
     .hero {
-        margin-bottom: 2.75rem;
+        margin-bottom: 1.25rem;
         padding-top: 0.25rem;
     }
     .hero-eyebrow {
@@ -180,7 +190,7 @@ st.markdown(
     }
     .hero-title {
         font-family: "Fraunces", serif;
-        font-size: clamp(3.25rem, 9vw, 5.5rem);
+        font-size: clamp(2.25rem, 5vw, 3.5rem);
         font-weight: 600;
         line-height: 0.92;
         margin: 0 0 1rem;
@@ -235,7 +245,7 @@ st.markdown(
         text-transform: none;
     }
 
-    /* Panels — Streamlit bordered containers */
+    /* Panels - Streamlit bordered containers */
     [data-testid="stVerticalBlockBorderWrapper"] {
         border-color: #e5e2dc !important;
         border-radius: 2px !important;
@@ -263,11 +273,11 @@ st.markdown(
     }
     .viavsr-transcript {
         font-family: "Fraunces", serif;
-        font-size: clamp(1.55rem, 2.8vw, 2.35rem);
+        font-size: clamp(1.2rem, 1.7vw, 1.65rem);
         font-weight: 400;
         line-height: 1.48;
         color: #1a1a1a;
-        padding: 2rem 2rem 2rem 2.25rem;
+        padding: 1.25rem;
         margin: 0;
         background: #ffffff;
         border: 2px solid #1a1a1a;
@@ -331,6 +341,26 @@ st.markdown(
         box-shadow: none !important;
     }
 
+    .viavsr-details { margin: 1rem 0 0; }
+    .viavsr-detail {
+        display: flex; justify-content: space-between; gap: 1rem;
+        padding: 0.45rem 0; border-bottom: 1px solid #eeece8;
+        font-size: 0.83rem; line-height: 1.5;
+    }
+    .viavsr-detail dt { color: #6b6b68; }
+    .viavsr-detail dd {
+        margin: 0; text-align: right; color: #1a1a1a;
+        font-weight: 500; overflow-wrap: anywhere;
+    }
+    [data-testid="stVideo"] video {
+        width: 100%; height: 280px; object-fit: contain; background: #151515;
+    }
+    .viavsr-empty { min-height: 280px; }
+    @media (max-width: 900px) {
+        [data-testid="stHorizontalBlock"] { flex-wrap: wrap; }
+        [data-testid="stColumn"] { min-width: min(100%, 320px); flex: 1 1 320px; }
+    }
+
     /* Radio / tabs feel */
     div[data-testid="stRadio"] > div {
         gap: 0.5rem;
@@ -375,7 +405,8 @@ def _tool(name: str) -> str | None:
 def _save_upload(name: str, data: bytes) -> Path:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     path = UPLOAD_DIR / name
-    path.write_bytes(data)
+    if not path.is_file() or path.read_bytes() != data:
+        path.write_bytes(data)
     return path
 
 
@@ -451,7 +482,7 @@ def _configure_torch_speed() -> None:
 _configure_torch_speed()
 
 
-@st.cache_resource(show_spinner="Đang tải model…")
+@st.cache_resource(show_spinner="Loading model...")
 def _load_cached_model_assets():
     """Keep one model instance in memory across reruns (saves ~1.7 GB per inference)."""
     _ensure_repo_viavsr()
@@ -463,7 +494,7 @@ def _load_cached_model_assets():
     return load_vietnamese_avsr_assets(config)
 
 
-@st.cache_resource(show_spinner="Đang tải bộ theo dõi khuôn mặt…")
+@st.cache_resource(show_spinner="Loading face tracker...")
 def _load_cached_face_landmarker():
     """Keep one RetinaFace/FAN instance in memory across visual demo runs."""
     _ensure_repo_viavsr()
@@ -647,7 +678,7 @@ def _import_demo_runner():
         submodule_search_locations=[str(SRC / "viavsr")],
     )
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"Không load được {demo_path}")
+        raise RuntimeError(f"Could not load {demo_path}")
 
     module = importlib.util.module_from_spec(spec)
     sys.modules["viavsr.demo"] = module
@@ -656,8 +687,8 @@ def _import_demo_runner():
 
     if "skip_face_tracking" not in inspect.signature(run_end_to_end_demo).parameters:
         raise RuntimeError(
-            f"File {demo_path} thiếu tham số skip_face_tracking. "
-            "Chạy `pip install -e .` trong thư mục dự án rồi khởi động lại Streamlit."
+            f"File {demo_path} does not support skip_face_tracking. "
+            "Run `pip install -e .` from the project directory, then restart Streamlit."
         )
     return run_end_to_end_demo
 
@@ -678,41 +709,41 @@ def _call_run_end_to_end_demo(
     supported = {key: value for key, value in call_kwargs.items() if key in params}
     if audio_only and "skip_face_tracking" not in params:
         raise RuntimeError(
-            "demo.py trên máy chưa có tham số skip_face_tracking. "
-            "Cập nhật code (git pull) hoặc chạy `pip install -e .`, "
-            "rồi khởi động lại Streamlit."
+            "The local demo.py does not support skip_face_tracking. "
+            "Update the code with `git pull` or run `pip install -e .`, "
+            "then restart Streamlit."
         )
     return run_end_to_end_demo(**supported)
 
 
 with st.sidebar:
-    st.markdown("### Tuỳ chọn")
+    st.markdown("### Options")
     audio_only = st.toggle(
-        "Chỉ audio",
+        "Audio only",
         value=ON_CLOUD,
-        help="Không dùng hình miệng — nhanh hơn nhiều.",
+        help="Skip mouth-video processing for a faster run.",
     )
     visual_fallback_policy = st.selectbox(
-        "Xử lý khi mất hình",
+        "Missing-visual strategy",
         ("whole_utterance", "corrupted_av", "interval_gated"),
         index=0,
         disabled=audio_only,
         format_func=lambda value: {
-            "whole_utterance": "Fallback toàn câu về audio",
+            "whole_utterance": "Audio-only fallback for the full utterance",
             "corrupted_av": "Corrupted AV",
             "interval_gated": "Interval-gated AV",
         }[value],
-        help="Chọn cách xử lý khi chỉ một số khoảng hình miệng không khả dụng.",
+        help="Choose how to handle intervals where mouth frames are unavailable.",
     )
     fast_mode = st.toggle(
-        "Rút gọn",
+        "Fast mode",
         value=True,
         disabled=audio_only,
-        help="Clip 5 giây, encode nhẹ hơn.",
+        help="Use a 5-second clip and lighter encoding.",
     )
     clip_seconds = float(
         st.slider(
-            "Độ dài clip",
+            "Clip duration",
             min_value=3,
             max_value=8,
             value=FAST_CLIP_SECONDS if fast_mode else DEFAULT_CLIP_SECONDS,
@@ -726,120 +757,132 @@ with st.sidebar:
         ("ctc_greedy", "joint_beam_search"),
         index=1,
         format_func=lambda value: {
-            "ctc_greedy": "CTC greedy (nhanh)",
-            "joint_beam_search": "Joint CTC/Attention (khuyến nghị)",
+            "ctc_greedy": "CTC greedy (fast)",
+            "joint_beam_search": "Joint CTC/Attention",
         }[value],
-        help="Joint CTC/Attention là mặc định; CTC greedy là chế độ nhanh.",
+        help="Joint CTC/Attention is the default; CTC greedy is faster.",
     )
     if not _hf_credentials_ready():
         if ON_CLOUD:
-            st.warning("Cần **HF_TOKEN** trong Streamlit Secrets (Cloud).")
+            st.warning("Add **HF_TOKEN** to Streamlit Secrets on Cloud.")
         else:
             st.warning(
-                "Chưa thấy HF token. Set `$env:HF_TOKEN='hf_...'` **trong cùng terminal** "
-                "rồi chạy lại Streamlit, hoặc `huggingface-cli login`, "
-                "hoặc thêm `HF_TOKEN` vào `.streamlit/secrets.toml`."
+                "No Hugging Face token was found. Set `export HF_TOKEN='hf_...'` "
+                "in the same terminal and restart Streamlit, run "
+                "`huggingface-cli login`, or add `HF_TOKEN` to "
+                "`.streamlit/secrets.toml`."
             )
     _startup_warmup(include_visual=not audio_only)
 
-input_col, preview_col = st.columns([1, 1], gap="large")
-
-with input_col:
-    with st.container(border=True):
-        st.markdown(
-            '<p class="section-label"><span class="section-num">01</span> Nguồn</p>',
-            unsafe_allow_html=True,
-        )
-        source = st.radio(
-            "Chọn nguồn",
-            ("Upload", "Webcam", "Sample"),
-            horizontal=True,
-            label_visibility="collapsed",
-        )
-        media_path: Path | None = st.session_state.get("media_path")
-
-        if source == "Upload":
-            uploaded = st.file_uploader(
-                "Video có âm thanh",
-                type=["mp4", "webm", "mov"],
-                label_visibility="collapsed",
-            )
-            if uploaded is not None:
-                media_path = _save_upload(uploaded.name, uploaded.getvalue())
-                st.session_state.media_path = media_path
-
-        elif source == "Webcam":
-            recorded = RECORDER(key="webcam")
-            if recorded:
-                try:
-                    media_path = _data_url_to_webm(recorded)
-                    st.session_state.media_path = media_path
-                except Exception as exc:
-                    st.error(f"Không đọc được bản ghi webcam: {exc}")
-                    media_path = None
-
-        else:
-            samples = sorted(SAMPLE_DIR.glob("vi_*.mp4"))
-            if not samples:
-                st.info("Chưa có mẫu tiếng Việt. Dùng Upload hoặc Webcam.")
-            else:
-                choice = st.selectbox(
-                    "Mẫu tiếng Việt",
-                    samples,
-                    format_func=lambda p: p.name,
-                    label_visibility="collapsed",
-                )
-                if choice is not None:
-                    media_path = choice
-                    st.session_state.media_path = media_path
-
-with preview_col:
-    with st.container(border=True):
-        st.markdown(
-            '<p class="section-label"><span class="section-num">02</span> Xem trước</p>',
-            unsafe_allow_html=True,
-        )
-        if media_path and media_path.is_file():
-            duration = _duration_seconds(media_path)
-            if duration is not None and duration > clip_seconds:
-                st.warning(
-                    f"File dài {duration:.1f}s — chỉ dùng {clip_seconds:.0f}s đầu."
-                )
-            st.video(str(media_path))
-        else:
-            st.markdown(
-                '<div class="viavsr-empty">Chưa có video</div>',
-                unsafe_allow_html=True,
-            )
-
-_, btn_col, _ = st.columns([1, 1.2, 1])
-with btn_col:
-    run = st.button(
-        "Chạy nhận dạng",
-        type="primary",
-        use_container_width=True,
-        disabled=not (media_path and media_path.is_file()),
+def _details(rows: list[tuple[str, str]]) -> None:
+    """Render compact, escaped metadata underneath each panel."""
+    entries = "".join(
+        '<div class="viavsr-detail">'
+        f"<dt>{html.escape(label)}</dt><dd>{html.escape(value)}</dd></div>"
+        for label, value in rows
+    )
+    st.markdown(
+        f'<dl class="viavsr-details">{entries}</dl>', unsafe_allow_html=True
     )
 
-if run and media_path and media_path.is_file():
-    try:
-        with st.status("Đang xử lý…", expanded=True) as status:
-            status.write("Chuẩn bị tokenizer…")
-            _ensure_tokenizer_assets()
-            status.write("Xử lý video…")
-            prepared = _prepare_media(
-                media_path,
-                clip_seconds,
-                max_width=max_width,
-                audio_only=audio_only,
-                fast=fast_mode,
+
+def _number(value: Any, unit: str = "", digits: int = 1) -> str:
+    return "Not available" if value is None else f"{float(value):.{digits}f}{unit}"
+
+
+def _placeholder(message: str) -> None:
+    st.markdown(
+        f'<div class="viavsr-empty">{html.escape(message)}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+@st.cache_data(show_spinner=False)
+def _source_metadata(path: str, modified_ns: int, size: int) -> dict[str, Any]:
+    """Cache metadata per file version without loading recognition models."""
+    from viavsr.preprocessing import probe_av_media
+
+    return probe_av_media(path).to_dict()
+
+
+with st.sidebar:
+    st.divider()
+    st.markdown("### Input")
+    source = st.radio("Input source", ("Upload", "Webcam", "Sample"), horizontal=True)
+    media_path: Path | None = None
+    if source == "Upload":
+        uploaded = st.file_uploader(
+            "Video with audio", type=["mp4", "webm", "mov"]
+        )
+        if uploaded is not None:
+            media_path = _save_upload(uploaded.name, uploaded.getvalue())
+    elif source == "Webcam":
+        recorded = RECORDER(key="webcam")
+        if recorded:
+            try:
+                media_path = _data_url_to_webm(recorded)
+            except Exception as exc:
+                st.error(f"Could not read the webcam recording: {exc}")
+    else:
+        samples = sorted(SAMPLE_DIR.glob("*.mp4"))
+        if samples:
+            media_path = st.selectbox(
+                "Vietnamese sample", samples, format_func=lambda p: p.name
             )
-            status.write(
-                "Nhận dạng…" if audio_only else "Theo dõi khuôn mặt và nhận dạng…"
+        else:
+            st.info("No samples are available. Use Upload or Webcam.")
+    reference = st.text_area(
+        "Reference transcript (optional)",
+        help="Enter the exact Vietnamese words in the processed clip to calculate "
+        "WER and CER. Include Vietnamese diacritics.",
+    )
+    st.caption("The reference must match the selected clip duration.")
+
+source_metadata: dict[str, Any] = {}
+request_key = None
+if media_path and media_path.is_file():
+    file_stat = media_path.stat()
+    request_key = (
+        str(media_path.resolve()), file_stat.st_mtime_ns, file_stat.st_size,
+        audio_only, visual_fallback_policy, fast_mode, clip_seconds, decoder,
+        reference.strip(),
+    )
+    try:
+        source_metadata = _source_metadata(
+            str(media_path), file_stat.st_mtime_ns, file_stat.st_size
+        )
+    except Exception as exc:
+        st.warning(f"Could not inspect the input media: {exc}")
+
+# Reserve the three cards before the action area; fill them with this run's data.
+input_col, mouth_col, result_col = st.columns([1, 1, 1], gap="medium")
+input_panel = input_col.container(border=True)
+mouth_panel = mouth_col.container(border=True)
+result_panel = result_col.container(border=True)
+
+run = st.button(
+    "Run recognition",
+    type="primary",
+    disabled=request_key is None,
+)
+if run and request_key is not None:
+    # Invalidate the old result before any work, including failures during upload prep.
+    st.session_state.pop("result", None)
+    st.session_state.pop("result_request_key", None)
+    try:
+        with st.status("Processing...", expanded=True) as progress:
+            progress.write("Preparing tokenizer...")
+            _ensure_tokenizer_assets()
+            progress.write("Preprocessing media...")
+            prepared = _prepare_media(
+                media_path, clip_seconds, max_width=max_width,
+                audio_only=audio_only, fast=fast_mode,
+            )
+            progress.write(
+                "Recognizing..." if audio_only else "Tracking face and recognizing..."
             )
             assets = _load_cached_model_assets()
             landmarker = None if audio_only else _load_cached_face_landmarker()
-
             result = _call_run_end_to_end_demo(
                 audio_only=audio_only,
                 preloaded_assets=assets,
@@ -849,77 +892,173 @@ if run and media_path and media_path.is_file():
                 output_root=OUTPUT_ROOT,
                 tracking_device="auto",
                 decoder=decoder,
+                reference_text=reference.strip() or None,
                 max_duration_seconds=float(clip_seconds + DURATION_SLACK),
                 max_detection_size=max_detection,
                 detection_stride=2 if fast_mode else 1,
                 visual_fallback_policy=visual_fallback_policy,
             )
-            status.write("Xong.")
-            status.update(label="Hoàn tất", state="complete")
+            passed = result.get("status") == "passed"
+            progress.update(
+                label="Completed" if passed else "Failed",
+                state="complete" if passed else "error",
+            )
         st.session_state.result = result
+        st.session_state.result_request_key = request_key
         gc.collect()
     except Exception as exc:
-        st.error(str(exc))
+        st.error(f"Recognition failed: {exc}")
 
-if "result" in st.session_state:
-    result = st.session_state.result
-    inner = result.get("result") or {}
-    modality = result.get("modality_decision") or {}
-    artifacts = result.get("artifacts") or {}
-    timings = result.get("timings_seconds") or {}
-    status = result.get("status", "")
-    transcript = inner.get("transcript") or "(trống)"
+# A changed file, reference or option must not show a previous recording's metrics.
+result = (
+    st.session_state.get("result")
+    if request_key is not None
+    and st.session_state.get("result_request_key") == request_key
+    else None
+)
+report = result or {}
+inner = report.get("result") or {}
+tracking = report.get("face_tracking") or {}
+display = report.get("mouth_roi_display") or {}
+availability = display.get("visual_availability") or tracking.get("visual_availability") or {}
+timings = report.get("timings_seconds") or {}
+mode = (report.get("modality_decision") or {}).get("selected_mode")
+mode_labels = {
+    "audio_visual": "Audio + Video",
+    "audio_visual_corrupted": "Corrupted AV",
+    "audio_visual_interval_gated": "Interval-gated AV",
+    "audio_only_fallback": "Audio-only fallback",
+    "audio_only_experimental": "Audio only",
+}
 
-    with st.container(border=True):
-        st.markdown(
-            '<p class="section-label"><span class="section-num">03</span> Kết quả</p>',
-            unsafe_allow_html=True,
+with input_panel:
+    st.markdown("#### 1. Original Input")
+    if media_path and media_path.is_file():
+        st.video(str(media_path))
+        _details([
+            ("File", media_path.name),
+            ("Duration", _number(source_metadata.get("duration_seconds"), " s", 2)),
+            ("Audio sample rate", _number(source_metadata.get("audio_sample_rate"), " Hz", 0)),
+            ("Video frame rate", _number(source_metadata.get("frame_rate"), " FPS", 2)),
+            ("Resolution", f"{source_metadata['video_width']} x {source_metadata['video_height']}"
+             if source_metadata else "Not available"),
+            ("Source", source),
+            ("Clip limit", f"First {clip_seconds:.0f} s"),
+        ])
+        duration = source_metadata.get("duration_seconds")
+        if duration and duration > clip_seconds:
+            st.caption(f"Recognition uses only the first {clip_seconds:.0f} seconds.")
+    else:
+        _placeholder("Upload, record or select a video in the sidebar.")
+
+with mouth_panel:
+    st.markdown("#### 2. Processed Mouth ROI")
+    mouth_path = (report.get("artifacts") or {}).get("mouth_roi")
+    if mouth_path and Path(mouth_path).is_file():
+        st.video(mouth_path)
+        st.caption("Missing visual intervals are marked as NO VISUAL SIGNAL.")
+    else:
+        _placeholder(
+            "Mouth ROI is unavailable for this run."
+            if result else "The processed mouth video will appear after recognition."
         )
-
-        mode = modality.get("selected_mode", "—")
-        total_s = timings.get("total", 0)
-
-        st.markdown(
-            f'<div class="viavsr-meta">'
-            f"<span>Trạng thái · <strong>{html.escape(status)}</strong></span>"
-            f"<span>Chế độ · <strong>{html.escape(mode.replace('_', ' '))}</strong></span>"
-            f"<span>{total_s:.1f}s</span>"
-            f"</div>",
-            unsafe_allow_html=True,
+    if result:
+        count = availability.get("frame_count")
+        valid = availability.get("valid_frames")
+        coverage = availability.get("coverage")
+        valid_label = (
+            f"{valid} / {count} ({coverage:.1%})"
+            if count is not None and valid is not None and coverage is not None
+            else "Not available"
         )
+        output_media = display.get("output_media") or {}
+        _details([
+            ("Mouth crop", f"{display['mouth_roi_size']} x {display['mouth_roi_size']}"
+             if display.get("mouth_roi_size") else "Not available"),
+            ("Frames with visual signal", valid_label),
+            ("Missing frames", str(availability.get("missing_frames", "Not available"))),
+            ("Tracking quality", str(tracking.get("quality_status", "Not available")).capitalize()),
+            ("ROI frame rate", _number(output_media.get("frame_rate"), " FPS", 1)),
+            ("Face tracking", _number(timings.get("face_tracking"), " s", 2)),
+            ("ROI export", _number(timings.get("mouth_roi"), " s", 2)),
+        ])
+        st.caption("Model input: grayscale 96 x 96 ROI, center crop to 88 x 88, normalization.")
+        if mode and mode.startswith("audio_only"):
+            st.caption("This run uses audio only; any ROI shown is for inspection.")
+        intervals = availability.get("missing_intervals") or []
+        if intervals:
+            with st.expander("Missing visual intervals"):
+                for interval in intervals:
+                    st.write(
+                        f"{interval['start_seconds']:.2f} - "
+                        f"{interval['end_seconds']:.2f} s "
+                        f"({interval['frame_count']} frames)"
+                    )
 
-        st.markdown(
-            f'<div class="viavsr-transcript-wrap">'
-            f'<p class="viavsr-transcript">{html.escape(transcript)}</p>'
-            f"</div>",
-            unsafe_allow_html=True,
-        )
-
-        metric_cols = st.columns(4)
-        metric_cols[0].metric("Tổng", f"{total_s:.1f}s")
-        metric_cols[1].metric("Modality", mode.replace("_", " "))
-        metric_cols[2].metric("Model", f"{timings.get('model_loading', 0):.1f}s")
-        metric_cols[3].metric("Inference", f"{timings.get('inference', 0):.1f}s")
-
-        step_keys = ("face_tracking", "mouth_roi", "model_loading", "inference")
-        step_parts = [
-            f"{key.replace('_', ' ')}: {timings[key]:.1f}s"
-            for key in step_keys
-            if key in timings and timings[key]
+with result_panel:
+    st.markdown("#### 3. Recognition Result")
+    if not result:
+        _placeholder("Run recognition to see the transcript and scores.")
+        if st.session_state.get("result"):
+            st.caption("Input or settings changed. Run again to update the results.")
+    else:
+        if report.get("status") == "passed":
+            st.success("Completed")
+        else:
+            st.error((report.get("error") or {}).get("message", "Recognition failed."))
+        if inner:
+            st.caption("Transcript")
+            transcript = inner.get("transcript") or "(empty)"
+            st.markdown(
+                '<div class="viavsr-transcript-wrap">'
+                f'<p class="viavsr-transcript">{html.escape(transcript)}</p></div>',
+                unsafe_allow_html=True,
+            )
+        st.markdown("**Runtime & decoding**")
+        preprocessing_values = [
+            value for key, value in timings.items()
+            if key in {
+                "media_preflight", "face_tracking_backend", "face_tracking",
+                "mouth_roi_display", "mouth_roi", "av_preprocessing", "audio_preprocessing",
+            }
         ]
-        if step_parts:
-            st.caption(" · ".join(step_parts))
-
-        mouth = artifacts.get("mouth_roi")
-        if mouth and Path(mouth).is_file():
-            with st.expander("Video miệng"):
-                st.video(mouth)
-
-        warnings = result.get("warnings") or []
+        _details([
+            ("Mode used", mode_labels.get(mode, mode or "Not available")),
+            ("Decoder", {"joint_beam_search": "Joint CTC/Attention",
+                         "ctc_greedy": "CTC greedy"}.get(inner.get("decoder"), "Not available")),
+            ("Preprocessing", _number(sum(preprocessing_values) if preprocessing_values else None, " s", 2)),
+            ("Model loading", _number(timings.get("model_loading"), " s", 2)),
+            ("Inference", _number(timings.get("inference"), " s", 2)),
+            ("Pipeline total", _number(timings.get("total"), " s", 2)),
+            ("Device", inner.get("device", "Not available")),
+        ])
+        st.caption("Pipeline time excludes upload preparation and initial model warm-up.")
+        evaluation = report.get("evaluation")
+        if evaluation:
+            wer_col, cer_col = st.columns(2)
+            wer_col.metric("WER", f"{evaluation['wer']:.2%}")
+            cer_col.metric("CER", f"{evaluation['cer']:.2%}")
+            st.caption("Compared with the supplied reference transcript.")
+        elif inner:
+            st.caption("Add a reference transcript before running to calculate WER and CER.")
+        if inner.get("hypothesis_score") is not None:
+            with st.expander("Decoder details"):
+                _details([
+                    ("Beam size", str(inner.get("beam_size", "Not available"))),
+                    ("CTC weight", _number(inner.get("ctc_weight"), digits=2)),
+                    ("Hypothesis score", _number(inner["hypothesis_score"], digits=3)),
+                ])
+                st.caption("The decoder score is not a calibrated confidence probability.")
+        warnings = report.get("warnings") or []
         if warnings:
-            st.warning("\n".join(str(item) for item in warnings))
-        if status != "passed" and result.get("error"):
-            st.error(result["error"].get("message", "Inference failed"))
-
-        with st.expander("Báo cáo JSON"):
-            st.json(result)
+            with st.expander("Run notes"):
+                for warning in warnings:
+                    st.write(str(warning).replace("_", " "))
+        st.download_button(
+            "Export result (JSON)",
+            data=json.dumps(report, ensure_ascii=False, indent=2),
+            file_name=f"{media_path.stem}_result.json",
+            mime="application/json",
+        )
+        with st.expander("Full JSON report"):
+            st.json(report)
