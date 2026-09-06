@@ -8,7 +8,7 @@ import yaml
 
 from .errors import ConfigurationError
 
-DeviceName = Literal["cpu", "cuda"]
+DeviceName = Literal["auto", "cpu", "cuda"]
 DTypeName = Literal["float32", "float16", "bfloat16"]
 
 
@@ -21,7 +21,7 @@ class ModelAssetsConfig:
     cache_dir: Path
     tokenizer_model_path: Path
     tokenizer_units_path: Path
-    device: DeviceName = "cuda"
+    device: DeviceName = "auto"
     dtype: DTypeName = "float32"
 
 
@@ -72,11 +72,11 @@ def load_model_assets_config(
         )
 
     root = project_root.resolve() if project_root else _repository_root(config_path)
-    device = str(model.get("device", "cuda"))
+    device = str(model.get("device", "auto"))
     dtype = str(model.get("dtype", "float32"))
-    if device not in {"cpu", "cuda"}:
+    if device not in {"auto", "cpu", "cuda"}:
         raise ConfigurationError(
-            "model.device must be either 'cpu' or 'cuda'.", stage="config"
+            "model.device must be 'auto', 'cpu', or 'cuda'.", stage="config"
         )
     if dtype not in {"float32", "float16", "bfloat16"}:
         raise ConfigurationError(

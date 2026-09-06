@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, replace
+from numbers import Integral
 from pathlib import Path
 from typing import Any, Literal
 
 from viavsr.evaluation import evaluate_transcript
-from viavsr.inference.schemas import LoadedAVSRAssets
 from viavsr.inference import (
     DEFAULT_BEAM_SIZE,
     DEFAULT_CTC_WEIGHT,
@@ -19,6 +19,7 @@ from viavsr.inference import (
 from viavsr.inference.errors import ModelAssetsError
 from viavsr.inference.recognition import DecoderName
 from viavsr.inference.reporting import redact_secrets, write_json_report
+from viavsr.inference.schemas import LoadedAVSRAssets
 from viavsr.preprocessing import (
     FANFaceLandmarker,
     MediaInputError,
@@ -31,7 +32,11 @@ from viavsr.preprocessing import (
     save_face_tracking_artifacts,
     track_face_landmarks,
 )
-from viavsr.preprocessing.face_tracking import DEFAULT_DETECTION_MAX_SIZE, DeviceRequest
+from viavsr.preprocessing.face_tracking import (
+    DEFAULT_DETECTION_MAX_SIZE,
+    DeviceRequest,
+    FaceLandmarker,
+)
 from viavsr.preprocessing.media import TARGET_FRAME_RATE
 
 DEMO_REPORT_SCHEMA_VERSION = 3
@@ -152,6 +157,7 @@ def _validate_run_options(
     max_duration_seconds: float,
     frame_rate: int,
     max_detection_size: int,
+    detection_stride: int,
     visual_fallback_policy: VisualFallbackPolicy,
 ) -> None:
     if decoder not in {"ctc_greedy", "joint_beam_search"}:
@@ -166,8 +172,16 @@ def _validate_run_options(
         raise ValueError("frame_rate must be greater than zero.")
     if max_detection_size <= 0:
         raise ValueError("max_detection_size must be greater than zero.")
+    if (
+        isinstance(detection_stride, bool)
+        or not isinstance(detection_stride, Integral)
+        or detection_stride <= 0
+    ):
+        raise ValueError("detection_stride must be a positive integer.")
     if visual_fallback_policy not in {
-        "whole_utterance", "corrupted_av", "interval_gated"
+        "whole_utterance",
+        "corrupted_av",
+        "interval_gated",
     }:
         raise ValueError(
             f"Unsupported visual fallback policy: {visual_fallback_policy}"
@@ -249,6 +263,7 @@ def run_end_to_end_demo(
     media_path: Path,
     output_root: Path,
     tracking_device: DeviceRequest = "auto",
+    preloaded_landmarker: FaceLandmarker | None = None,
     decoder: DecoderName = "joint_beam_search",
     beam_size: int = DEFAULT_BEAM_SIZE,
     ctc_weight: float = DEFAULT_CTC_WEIGHT,
@@ -256,6 +271,7 @@ def run_end_to_end_demo(
     max_duration_seconds: float = 15.0,
     frame_rate: int = TARGET_FRAME_RATE,
     max_detection_size: int = DEFAULT_DETECTION_MAX_SIZE,
+    detection_stride: int = 1,
     confidence_threshold: float | None = None,
     visual_fallback_policy: VisualFallbackPolicy = "whole_utterance",
     keep_intermediates: bool = False,
@@ -282,6 +298,7 @@ def run_end_to_end_demo(
             "config_path": str(resolved_config),
             "media_path": str(resolved_media),
             "tracking_device": tracking_device,
+            "preloaded_landmarker": preloaded_landmarker is not None,
             "decoder": decoder,
             "beam_size": beam_size,
             "ctc_weight": ctc_weight,
@@ -289,6 +306,7 @@ def run_end_to_end_demo(
             "max_duration_seconds": max_duration_seconds,
             "frame_rate": frame_rate,
             "max_detection_size": max_detection_size,
+            "detection_stride": detection_stride,
             "confidence_threshold": confidence_threshold,
             "visual_fallback_policy": visual_fallback_policy,
             "keep_intermediates": keep_intermediates,
@@ -311,6 +329,7 @@ def run_end_to_end_demo(
             max_duration_seconds=max_duration_seconds,
             frame_rate=frame_rate,
             max_detection_size=max_detection_size,
+            detection_stride=detection_stride,
             visual_fallback_policy=visual_fallback_policy,
         )
 
@@ -364,14 +383,18 @@ def run_end_to_end_demo(
                     min_detection_confidence=confidence_threshold,
                 )
             stage = "face_tracking_backend"
-            stage_started = time.perf_counter()
-            landmarker = FANFaceLandmarker(
-                device=tracking_device,
-                confidence_threshold=quality_policy.min_detection_confidence,
-            )
-            payload["timings_seconds"]["face_tracking_backend"] = (
-                time.perf_counter() - stage_started
-            )
+            if preloaded_landmarker is None:
+                stage_started = time.perf_counter()
+                landmarker = FANFaceLandmarker(
+                    device=tracking_device,
+                    confidence_threshold=quality_policy.min_detection_confidence,
+                )
+                payload["timings_seconds"]["face_tracking_backend"] = (
+                    time.perf_counter() - stage_started
+                )
+            else:
+                landmarker = preloaded_landmarker
+                payload["timings_seconds"]["face_tracking_backend"] = 0.0
 
             stage = "face_tracking"
             stage_started = time.perf_counter()
@@ -382,6 +405,7 @@ def run_end_to_end_demo(
                     frame_rate=frame_rate,
                     policy=quality_policy,
                     max_detection_size=max_detection_size,
+                    detection_stride=detection_stride,
                 )
             except MediaInputError as exc:
                 tracking_seconds = time.perf_counter() - stage_started

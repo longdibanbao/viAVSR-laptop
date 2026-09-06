@@ -211,6 +211,7 @@ class TrackedFaceSequence:
     processing_height: int
     frame_rate: int
     backend: str
+    detection_stride: int
     device: str
     policy: FaceTrackingQualityPolicy
     landmarks: np.ndarray
@@ -234,12 +235,22 @@ class TrackedFaceSequence:
         return int(self.detected.sum())
 
     @property
+    def observed_frames(self) -> int:
+        sampled = len(range(0, self.frame_count, self.detection_stride))
+        final_was_skipped = (self.frame_count - 1) % self.detection_stride != 0
+        return sampled + int(final_was_skipped)
+
+    @property
+    def detector_skipped_frames(self) -> int:
+        return self.frame_count - self.observed_frames
+
+    @property
     def interpolated_frames(self) -> int:
         return self.frame_count - self.detected_frames
 
     @property
     def detection_rate(self) -> float:
-        return self.detected_frames / self.frame_count
+        return self.detected_frames / self.observed_frames
 
     @property
     def mouth_visible_frames(self) -> int:
@@ -316,7 +327,7 @@ class TrackedFaceSequence:
         if filled_frames:
             warnings.append("short_visual_gaps_interpolated_for_display")
         return {
-            "status": "passed" if not quality_issues else "failed",
+            "status": "passed" if not quality_issues else "degraded",
             "quality_status": "passed" if not quality_issues else "failed",
             "quality_issues": quality_issues,
             "warnings": warnings,
@@ -327,12 +338,15 @@ class TrackedFaceSequence:
             "device": self.device,
             "frame_rate": self.frame_rate,
             "frame_count": self.frame_count,
+            "detection_stride": self.detection_stride,
             "processing_resolution": [
                 self.processing_width,
                 self.processing_height,
             ],
             "landmark_topology": "ibug_68",
             "detected_frames": self.detected_frames,
+            "observed_frames": self.observed_frames,
+            "detector_skipped_frames": self.detector_skipped_frames,
             "interpolated_frames": self.interpolated_frames,
             "detection_rate": self.detection_rate,
             "ambiguous_frames": self.ambiguous_frames,
@@ -916,9 +930,16 @@ def build_tracked_sequence(
     frame_rate: int,
     backend: str,
     device: str,
+    detection_stride: int = 1,
     policy: FaceTrackingQualityPolicy | None = None,
 ) -> TrackedFaceSequence:
     """Select one track, record quality failures, and interpolate for handoff."""
+    if (
+        isinstance(detection_stride, bool)
+        or not isinstance(detection_stride, Integral)
+        or detection_stride <= 0
+    ):
+        raise ValueError("detection_stride must be a positive integer.")
     active_policy = policy or FaceTrackingQualityPolicy()
     frame_count = len(candidates_by_frame)
     if frame_count == 0:
@@ -974,7 +995,7 @@ def build_tracked_sequence(
     mouth_visible = stabilize_visual_availability(
         mouth_visible_raw,
         max_short_gap=active_policy.max_short_visual_gap,
-        min_valid_run=active_policy.min_visual_run,
+        min_valid_run=1 if detection_stride > 1 else active_policy.min_visual_run,
     )
     interpolated_landmarks = interpolate_missing_rows(landmarks, detected)
     interpolated_boxes = interpolate_missing_rows(boxes, detected)
@@ -983,6 +1004,7 @@ def build_tracked_sequence(
         processing_width=processing_width,
         processing_height=processing_height,
         frame_rate=frame_rate,
+        detection_stride=detection_stride,
         backend=backend,
         device=device,
         policy=active_policy,
@@ -1007,6 +1029,7 @@ def track_face_landmarks(
     device: DeviceRequest = "auto",
     frame_rate: int = TARGET_FRAME_RATE,
     max_detection_size: int = DEFAULT_DETECTION_MAX_SIZE,
+    detection_stride: int = 1,
     policy: FaceTrackingQualityPolicy | None = None,
 ) -> TrackedFaceSequence:
     """Detect and temporally track one 68-point face across a media file."""
@@ -1014,6 +1037,12 @@ def track_face_landmarks(
         raise MediaInputError("Face-tracking frame rate must be positive.")
     if max_detection_size <= 0:
         raise MediaInputError("Face-tracking maximum detection size must be positive.")
+    if (
+        isinstance(detection_stride, bool)
+        or not isinstance(detection_stride, Integral)
+        or detection_stride <= 0
+    ):
+        raise MediaInputError("Face-tracking detection stride must be positive.")
     active_policy = policy or FaceTrackingQualityPolicy()
     media_path = Path(path).expanduser().resolve()
     metadata = probe_av_media(media_path)
@@ -1029,24 +1058,43 @@ def track_face_landmarks(
     scale_x = metadata.video_width / processing_width
     scale_y = metadata.video_height / processing_height
     candidates_by_frame: list[list[FaceCandidate]] = []
-    for frame in iter_resampled_rgb_frames(
-        media_path,
-        width=processing_width,
-        height=processing_height,
-        frame_rate=frame_rate,
-    ):
-        candidates_by_frame.append(
-            [
-                _scale_candidate(item, scale_x=scale_x, scale_y=scale_y)
-                for item in active_landmarker.detect(frame)
-            ]
+    final_skipped: tuple[int, np.ndarray] | None = None
+
+    def detect_candidates(frame: np.ndarray) -> list[FaceCandidate]:
+        return [
+            _scale_candidate(item, scale_x=scale_x, scale_y=scale_y)
+            for item in active_landmarker.detect(frame)
+        ]
+
+    for frame_index, frame in enumerate(
+        iter_resampled_rgb_frames(
+            media_path,
+            width=processing_width,
+            height=processing_height,
+            frame_rate=frame_rate,
         )
+    ):
+        if frame_index % detection_stride == 0:
+            candidates_by_frame.append(detect_candidates(frame))
+            final_skipped = None
+        else:
+            candidates_by_frame.append([])
+            final_skipped = (frame_index, frame)
+
+    # Always observe the final frame so stride-based sampling cannot manufacture
+    # a trailing visual gap. Intermediate skipped frames are reconstructed by the
+    # same temporal interpolation/stabilization already used for short dropouts.
+    if final_skipped is not None:
+        frame_index, frame = final_skipped
+        candidates_by_frame[frame_index] = detect_candidates(frame)
+
     return build_tracked_sequence(
         candidates_by_frame,
         media=metadata,
         processing_width=processing_width,
         processing_height=processing_height,
         frame_rate=frame_rate,
+        detection_stride=detection_stride,
         backend=active_landmarker.name,
         device=active_landmarker.device,
         policy=active_policy,
@@ -1071,6 +1119,10 @@ def save_face_tracking_artifacts(
         landmark_scores=sequence.landmark_scores,
         detection_confidences=sequence.detection_confidences,
         detected=sequence.detected,
+        detection_stride=np.asarray(
+            [sequence.detection_stride],
+            dtype=np.int32,
+        ),
         mouth_visible_raw=sequence.mouth_visible_raw,
         mouth_visible=sequence.mouth_visible,
         original_resolution=np.asarray(

@@ -51,11 +51,13 @@ def _install_successful_stages(
         landmarker: object,
         frame_rate: int,
         max_detection_size: int,
+        detection_stride: int,
         policy: FaceTrackingQualityPolicy,
     ):
         assert landmarker is not None
         assert frame_rate == 25
         assert max_detection_size == 640
+        assert detection_stride == 1
         assert isinstance(policy, FaceTrackingQualityPolicy)
         calls.append("track")
         return SimpleNamespace(
@@ -306,6 +308,34 @@ def test_end_to_end_demo_writes_consolidated_success_report(
     ]
 
 
+def test_end_to_end_demo_reuses_preloaded_landmarker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_media = tmp_path / "webcam_001.mp4"
+    raw_media.write_bytes(b"raw")
+    calls: list[str] = []
+    _install_successful_stages(monkeypatch, raw_media=raw_media, calls=calls)
+    preloaded = SimpleNamespace(name="cached", device="cuda")
+
+    def reject_construction(**_kwargs):
+        raise AssertionError("FANFaceLandmarker should not be constructed")
+
+    monkeypatch.setattr(demo, "FANFaceLandmarker", reject_construction)
+
+    payload = demo.run_end_to_end_demo(
+        config_path=tmp_path / "config.yaml",
+        media_path=raw_media,
+        output_root=tmp_path / "outputs",
+        preloaded_landmarker=preloaded,
+    )
+
+    assert payload["status"] == "passed"
+    assert payload["request"]["preloaded_landmarker"] is True
+    assert payload["timings_seconds"]["face_tracking_backend"] == 0.0
+    assert calls[0] == "track"
+
+
 def test_debug_flag_retains_intermediate_artifacts(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -502,7 +532,7 @@ def test_quality_failure_falls_back_to_audio_only(
         calls.append("save_track")
         artifact_path.write_bytes(b"failed-track")
         return {
-            "status": "failed",
+            "status": "degraded",
             "quality_status": "failed",
             "quality_issues": sequence.quality_issues,
             "artifact_path": str(artifact_path),
@@ -525,6 +555,7 @@ def test_quality_failure_falls_back_to_audio_only(
     paths = demo.DemoArtifactPaths.for_media(raw_media, tmp_path / "outputs")
     assert payload["status"] == "passed"
     assert payload["stage"] == "complete"
+    assert payload["face_tracking"]["status"] == "degraded"
     assert payload["face_tracking"]["quality_status"] == "failed"
     assert payload["modality_decision"]["selected_mode"] == "audio_only_fallback"
     assert payload["modality_decision"]["fallback_reason"]["stage"] == (

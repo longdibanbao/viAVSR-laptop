@@ -39,7 +39,7 @@ model:
   repository_id: nguyenvulebinh/AV-HuBERT-CTC-Attention-VI
   revision: b8a1fa5d6079701b3f8f791bfd601057fbd23de3
   cache_dir: .cache/models
-  device: cpu
+  device: auto
   dtype: float32
 
 tokenizer:

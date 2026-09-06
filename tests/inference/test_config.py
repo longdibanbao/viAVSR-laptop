@@ -36,7 +36,7 @@ tokenizer:
     assert config.device == "cpu"
 
 
-@pytest.mark.parametrize("key,value", [("device", "auto"), ("dtype", "float64")])
+@pytest.mark.parametrize("key,value", [("device", "tpu"), ("dtype", "float64")])
 def test_load_config_rejects_unsupported_runtime_values(
     tmp_path: Path, key: str, value: str
 ):
@@ -59,3 +59,25 @@ tokenizer:
 
     with pytest.raises(ConfigurationError):
         load_model_assets_config(path, project_root=tmp_path)
+
+
+def test_load_config_accepts_auto_device(tmp_path: Path):
+    path = tmp_path / "assets.yaml"
+    path.write_text(
+        """
+model:
+  repository_id: owner/model
+  revision: abc123
+  cache_dir: cache
+  device: auto
+  dtype: float32
+tokenizer:
+  model_path: tokenizer.model
+  units_path: units.txt
+""",
+        encoding="utf-8",
+    )
+
+    config = load_model_assets_config(path, project_root=tmp_path)
+
+    assert config.device == "auto"

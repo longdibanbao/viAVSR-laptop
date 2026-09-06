@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import io
 import inspect
 
 import numpy as np
 import pytest
 
+from viavsr.preprocessing import mouth_roi
 from viavsr.preprocessing.errors import MediaInputError
 from viavsr.preprocessing.mouth_roi import (
     MOUTH_START_INDEX,
@@ -240,3 +242,38 @@ def test_load_face_track_artifact_rejects_unsupported_version(tmp_path) -> None:
         MediaInputError, match="Unsupported face-track artifact version"
     ):
         load_face_track_artifact(path)
+
+
+def test_mouth_encoder_pads_audio_to_preserve_video_timeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = io.BytesIO()
+            self.stderr = io.BytesIO()
+
+        def poll(self) -> int:
+            return 0
+
+        def wait(self, timeout: int | None = None) -> int:
+            return 0
+
+    captured: dict[str, list[str]] = {}
+
+    def fake_popen(command: list[str], **_kwargs: object) -> FakeProcess:
+        captured["command"] = command
+        return FakeProcess()
+
+    monkeypatch.setattr(mouth_roi, "_require_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(mouth_roi.subprocess, "Popen", fake_popen)
+
+    patches = [np.zeros((96, 96), dtype=np.uint8) for _ in range(2)]
+    encoded_frames = mouth_roi._encode_mouth_video(
+        patches,
+        source_path=tmp_path / "source.mp4",
+        output_path=tmp_path / "mouth.mp4",
+        frame_rate=25,
+    )
+
+    assert encoded_frames == 2
